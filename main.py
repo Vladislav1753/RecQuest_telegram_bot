@@ -57,13 +57,42 @@ def clean_text_response(text):
     return text#.strip()
 
 
+# Global variable for the chat session
+gemini_chat = None
+
+async def setup_gemini():
+    """Initialize and configure the model when the bot starts."""
+    global gemini_chat
+    model = genai.GenerativeModel("gemini-2.5-pro-exp-03-25")
+
+    # Start a chat session with predefined instructions
+    gemini_chat = model.start_chat(
+        history=[
+            {
+                "role": "user",
+                "parts": [
+                    "You are an assistant that recommends movies, TV shows, games, books, and anime. "
+                    "You should always provide up to 5 recommendations and avoid using markdown. "
+                    "Your responses should be relatively brief. "
+                    "Format: "
+                    "1. Recommendation Title - short review and some reasons it's similar to what the user sent. "
+                    "2. Recommendation Title - short review and some reasons it's similar to what the user sent. "
+                    "... and so on."
+                ]
+            }
+        ]
+    )
+    print("Gemini initialized!")
+
+
+
 async def get_gemini_recommendations(category, query):
-    """Функция получения рекомендаций от Gemini API"""
+    """Fetch recommendations from the pre-configured model."""
     try:
-        prompt = f"Recommend some {category.lower()} similar to: {query}. Do not use markdown formatting. Keep the answer brief, up to 5 recommendations."
-        model = genai.GenerativeModel("gemini-2.5-pro-exp-03-25")
-        chat = model.start_chat(history=[])
-        response = chat.send_message(prompt)
+        if gemini_chat is None:
+            await setup_gemini()  # Initialize if not already set up
+
+        response = gemini_chat.send_message(f"{category}: {query}")
 
         if not response or not hasattr(response, "text") or not response.text.strip():
             return ["No recommendations found."]
@@ -75,10 +104,10 @@ async def get_gemini_recommendations(category, query):
         logging.error(f"Error getting recommendations: {e}")
         return ["Sorry, I couldn't generate recommendations at the moment."]
 
-
 async def main():
+    """Start the bot and initialize Gemini."""
+    await setup_gemini()  # Initialize Gemini once on startup
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
