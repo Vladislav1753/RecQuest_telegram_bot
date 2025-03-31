@@ -20,9 +20,28 @@ category_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# Клавиатура с кнопкой возврата в главное меню
+back_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔙 Back to Main Menu")]
+    ],
+    resize_keyboard=True
+)
+
 # Инлайн кнопка "More"
 more_keyboard = InlineKeyboardMarkup(
-    inline_keyboard=[[InlineKeyboardButton(text="More", callback_data="more")]]
+    inline_keyboard=[
+        [InlineKeyboardButton(text="More recommendations", callback_data="more")]
+    ]
+)
+
+# Комбинированная клавиатура (для ввода запроса)
+combined_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔙 Back to Main Menu")]
+    ],
+    resize_keyboard=True,
+    input_field_placeholder="Enter title or genre..."
 )
 
 # Глобальный словарь для хранения состояний пользователей
@@ -59,6 +78,12 @@ async def setup_gemini():
 async def handle_message(message: types.Message):
     user_id = message.from_user.id
     text = message.text.strip()
+    
+    # Handle back to main menu command
+    if text == "🔙 Back to Main Menu":
+        await message.answer("Choose a category:", reply_markup=category_keyboard)
+        user_states[user_id] = {"step": "choose_category", "previous_recommendations": set()}
+        return
 
     if user_id not in user_states:
         await message.answer("Choose a category:", reply_markup=category_keyboard)
@@ -71,7 +96,7 @@ async def handle_message(message: types.Message):
         if text in categories:
             state["category"] = text
             state["step"] = "ask_query"
-            await message.answer(f"Enter a {text.lower()} title or genre:")
+            await message.answer(f"Enter a {text.lower()} title or genre:", reply_markup=combined_keyboard)
         else:
             await message.answer("Please select a category from the keyboard.")
 
@@ -79,6 +104,10 @@ async def handle_message(message: types.Message):
         state["query"] = text
         state["step"] = "recommendations"
         state["previous_recommendations"] = set()  # Reset previous recommendations
+        
+        # Show loading message
+        loading_message = await message.answer("Searching for recommendations...")
+        
         recommendations = await get_gemini_recommendations(state["category"], text, state["previous_recommendations"])
         
         # Update previous recommendations
@@ -87,8 +116,11 @@ async def handle_message(message: types.Message):
             if title_match:
                 state["previous_recommendations"].add(title_match.group(1).strip())
         
+        # Delete loading message and send recommendations
+        await bot.delete_message(chat_id=message.chat.id, message_id=loading_message.message_id)
         await message.answer("\n".join(recommendations), reply_markup=more_keyboard)
-        # Don't reset user state here to keep context for "More" button
+        # Keep the back button available
+        await message.answer("Need something else?", reply_markup=combined_keyboard)
 
 @dp.callback_query(lambda c: c.data == "more")
 async def handle_more_button(callback_query: types.CallbackQuery):
@@ -103,6 +135,9 @@ async def handle_more_button(callback_query: types.CallbackQuery):
     state = user_states[user_id]
     
     if "category" in state and "query" in state:
+        # Show loading message
+        loading_message = await callback_query.message.answer("Searching for more recommendations...")
+        
         # Get more recommendations while avoiding previous ones
         recommendations = await get_gemini_recommendations(
             state["category"], 
@@ -116,6 +151,8 @@ async def handle_more_button(callback_query: types.CallbackQuery):
             if title_match:
                 state["previous_recommendations"].add(title_match.group(1).strip())
         
+        # Delete loading message and send recommendations
+        await bot.delete_message(chat_id=callback_query.message.chat.id, message_id=loading_message.message_id)
         await callback_query.message.answer("\n".join(recommendations), reply_markup=more_keyboard)
     else:
         await callback_query.message.answer("Something went wrong. Please start over:", reply_markup=category_keyboard)
@@ -138,7 +175,7 @@ async def get_gemini_recommendations(category, query, previous_recommendations=N
         prompt = f"{category}: {query}"
         if previous_recommendations and len(previous_recommendations) > 0:
             avoid_list = ", ".join(previous_recommendations)
-            prompt += f"\nPlease provide new recommendations that are NOT in this list: {avoid_list}"
+            prompt += f"\nPlease provide 5 new recommendations that are NOT in this list: {avoid_list}"
 
         response = gemini_chat.send_message(prompt)
 
